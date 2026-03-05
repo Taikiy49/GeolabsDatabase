@@ -1,4 +1,4 @@
-# routes/pnp.py  (or wherever you keep your blueprint)
+# routes/pnp.py
 from __future__ import annotations
 
 import json
@@ -117,29 +117,15 @@ def ensure_schema(db: sqlite3.Connection) -> None:
 
     # --- migrations for history ---
     hist_cols = [r["name"] for r in db.execute(f"PRAGMA table_info({HISTORY_TABLE})").fetchall()]
-    if "changed_fields_json" not in hist_cols:
-        db.execute(f"ALTER TABLE {HISTORY_TABLE} ADD COLUMN changed_fields_json TEXT")
-    if "summary" not in hist_cols:
-        db.execute(f"ALTER TABLE {HISTORY_TABLE} ADD COLUMN summary TEXT")
-    if "user_email" not in hist_cols:
-        db.execute(f"ALTER TABLE {HISTORY_TABLE} ADD COLUMN user_email TEXT")
-    if "user_name" not in hist_cols:
-        db.execute(f"ALTER TABLE {HISTORY_TABLE} ADD COLUMN user_name TEXT")
-    if "user_oid" not in hist_cols:
-        db.execute(f"ALTER TABLE {HISTORY_TABLE} ADD COLUMN user_oid TEXT")
+    for col in ["changed_fields_json", "summary", "user_email", "user_name", "user_oid"]:
+        if col not in hist_cols:
+            db.execute(f"ALTER TABLE {HISTORY_TABLE} ADD COLUMN {col} TEXT")
 
     # --- migrations for undo stack ---
     undo_cols = [r["name"] for r in db.execute(f"PRAGMA table_info({UNDO_TABLE})").fetchall()]
-    if "changed_fields_json" not in undo_cols:
-        db.execute(f"ALTER TABLE {UNDO_TABLE} ADD COLUMN changed_fields_json TEXT")
-    if "summary" not in undo_cols:
-        db.execute(f"ALTER TABLE {UNDO_TABLE} ADD COLUMN summary TEXT")
-    if "user_email" not in undo_cols:
-        db.execute(f"ALTER TABLE {UNDO_TABLE} ADD COLUMN user_email TEXT")
-    if "user_name" not in undo_cols:
-        db.execute(f"ALTER TABLE {UNDO_TABLE} ADD COLUMN user_name TEXT")
-    if "user_oid" not in undo_cols:
-        db.execute(f"ALTER TABLE {UNDO_TABLE} ADD COLUMN user_oid TEXT")
+    for col in ["changed_fields_json", "summary", "user_email", "user_name", "user_oid"]:
+        if col not in undo_cols:
+            db.execute(f"ALTER TABLE {UNDO_TABLE} ADD COLUMN {col} TEXT")
 
     # --- backfill timestamps in main table ---
     db.execute(f"UPDATE {TABLE} SET created_at = {now_sql()} WHERE created_at IS NULL OR TRIM(created_at) = ''")
@@ -199,11 +185,19 @@ def build_summary(action: str, before: Optional[dict], after: Optional[dict]) ->
     s = " • ".join([b for b in bits if b])
     return s or "Project change"
 
+# ✅ IMPORTANT: actor comes from headers set by the React app (MSAL)
 def _actor_from_request() -> Dict[str, str]:
-    claims = getattr(request, "msal_claims", {}) or {}
-    email = claims.get("preferred_username") or claims.get("upn") or claims.get("email") or ""
-    name = claims.get("name") or ""
-    oid = claims.get("oid") or ""
+    email = (request.headers.get("X-User-Email") or "").strip()
+    name = (request.headers.get("X-User-Name") or "").strip()
+    oid = (request.headers.get("X-User-Oid") or "").strip()
+
+    # fallback to your old plan if you later add request.msal_claims middleware
+    if not (email or name or oid):
+        claims = getattr(request, "msal_claims", {}) or {}
+        email = claims.get("preferred_username") or claims.get("upn") or claims.get("email") or ""
+        name = claims.get("name") or ""
+        oid = claims.get("oid") or ""
+
     return {"email": str(email or ""), "name": str(name or ""), "oid": str(oid or "")}
 
 def write_history(

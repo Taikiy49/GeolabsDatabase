@@ -6,7 +6,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 def _parse_origins(raw: str) -> list[str]:
     if not raw:
-        return ["http://localhost:5173", "http://127.0.0.1:5173"]
+        return ["http://localhost:3000", "http://127.0.0.1:3000"]
     return [o.strip() for o in raw.split(",") if o.strip()]
 
 class Config:

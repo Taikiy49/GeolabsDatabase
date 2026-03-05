@@ -15,6 +15,8 @@ import geolabsLogo from "./assets/geolabs.png";
 import { useIsAuthenticated, useMsal } from "@azure/msal-react";
 import { loginRequest } from "./authConfig";
 
+import { setUserContext } from "./api/client"; // ✅ NEW
+
 export default function App() {
   const [toasts, setToasts] = useState([]);
   const [msalReady, setMsalReady] = useState(false);
@@ -36,6 +38,18 @@ export default function App() {
     return (accounts?.[0]?.username || "").toLowerCase();
   }, [accounts]);
 
+  // ✅ push MSAL user context into API client (email/name/oid)
+  useEffect(() => {
+    const acct = accounts?.[0] || null;
+    const claims = acct?.idTokenClaims || {};
+
+    setUserContext({
+      email: (acct?.username || claims?.preferred_username || claims?.upn || "").toLowerCase(),
+      name: claims?.name || acct?.name || "",
+      oid: claims?.oid || "",
+    });
+  }, [accounts]);
+
   // ✅ Ensure MSAL is initialized before we try redirect calls
   useEffect(() => {
     let alive = true;
@@ -48,7 +62,7 @@ export default function App() {
         if (alive) setMsalReady(true);
       } catch (e) {
         console.error(e);
-        if (alive) setMsalReady(true); // still allow UI; login will show toast on failure
+        if (alive) setMsalReady(true);
       }
     })();
 
@@ -88,7 +102,6 @@ export default function App() {
     }
   }, [isAuthenticated, email, pushToast]);
 
-  // Gate: MSAL not ready yet
   if (!msalReady) {
     return (
       <div className="login-screen app-fade-in">
@@ -102,7 +115,6 @@ export default function App() {
     );
   }
 
-  // Gate: not logged in
   if (!isAuthenticated) {
     return (
       <div className="login-screen app-fade-in">
@@ -122,7 +134,6 @@ export default function App() {
     );
   }
 
-  // Gate: wrong domain
   if (!email.endsWith("@geolabs.net")) {
     return (
       <div className="login-screen app-fade-in">
