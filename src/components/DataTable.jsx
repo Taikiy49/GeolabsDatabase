@@ -65,7 +65,7 @@ function DataTable({ items, fields, onCellCommit, pushToast }) {
     async ({ move }) => {
       if (!editing) return;
 
-      const { r, c, id, key } = editing;
+      const { r, id, key } = editing;
       const before = String(items?.[r]?.[key] ?? "");
       const after = String(draft ?? "");
 
