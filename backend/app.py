@@ -1,4 +1,3 @@
-# app.py
 from __future__ import annotations
 
 from flask import Flask, jsonify
@@ -12,7 +11,11 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.config.from_object(Config)
 
-    CORS(app, resources={r"/api/*": {"origins": Config.ALLOWED_ORIGINS}})
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": Config.ALLOWED_ORIGINS}},
+        supports_credentials=True,
+    )
 
     with app.app_context():
         init_db_schema()
@@ -23,12 +26,19 @@ def create_app() -> Flask:
 
     @app.get("/api/health")
     def health():
-        return jsonify({"ok": True})
+        return jsonify({
+            "ok": True,
+            "db_path": Config.DB_PATH,
+            "allowed_origins": Config.ALLOWED_ORIGINS,
+            "api_base_url": Config.API_BASE_URL,
+        })
 
     register_routes(app)
 
     print("USING DB:", Config.DB_PATH)
     print("ALLOWED ORIGINS:", Config.ALLOWED_ORIGINS)
+    print("API BASE URL:", Config.API_BASE_URL)
+
     return app
 
 app = create_app()
