@@ -1,5 +1,5 @@
 // src/api/client.js
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5000";
+const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5000";
 
 /**
  * MSAL user context (set from App.jsx after login)
@@ -29,7 +29,7 @@ function buildHeaders(hasBody) {
 
   if (hasBody) headers["Content-Type"] = "application/json";
 
-  // ✅ attach Microsoft user info (for history attribution)
+  // attach Microsoft user info (for history attribution)
   if (USER.email) headers["X-User-Email"] = USER.email;
   if (USER.name) headers["X-User-Name"] = USER.name;
   if (USER.oid) headers["X-User-Oid"] = USER.oid;
@@ -44,7 +44,9 @@ export async function apiGet(path) {
   });
 
   const body = await parseMaybeJson(res);
-  if (!res.ok) throw new Error(typeof body === "string" ? body : JSON.stringify(body, null, 2));
+  if (!res.ok) {
+    throw new Error(typeof body === "string" ? body : JSON.stringify(body, null, 2));
+  }
   return body;
 }
 
@@ -58,12 +60,14 @@ export async function apiSend(path, method = "POST", payload) {
   });
 
   const body = await parseMaybeJson(res);
-  if (!res.ok) throw new Error(typeof body === "string" ? body : JSON.stringify(body, null, 2));
+  if (!res.ok) {
+    throw new Error(typeof body === "string" ? body : JSON.stringify(body, null, 2));
+  }
   return body;
 }
 
 export async function apiUpload(path, formData) {
-  // ✅ do NOT set Content-Type for FormData (browser sets boundary)
+  // do NOT set Content-Type for FormData
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: buildHeaders(false),
@@ -71,6 +75,8 @@ export async function apiUpload(path, formData) {
   });
 
   const body = await parseMaybeJson(res);
-  if (!res.ok) throw new Error(typeof body === "string" ? body : JSON.stringify(body, null, 2));
+  if (!res.ok) {
+    throw new Error(typeof body === "string" ? body : JSON.stringify(body, null, 2));
+  }
   return body;
 }
