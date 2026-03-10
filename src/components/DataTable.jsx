@@ -1,39 +1,113 @@
-// src/components/DataTable.jsx
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 
-/**
- * Excel-like editing:
- * - Click cell to edit (single click)
- * - Enter commits + moves down
- * - Tab commits + moves right
- * - Shift+Tab commits + moves left
- * - Arrow keys move without needing mouse (commits if editing)
- * - Escape cancels edit (revert)
- *
- * No “Saving…” UI (you asked to remove it).
- */
+const DATE_FIELDS = new Set(["date", "report_date"]);
+
+function formatDisplayValue(key, value) {
+  if (value == null) return "";
+  const s = String(value).trim();
+  if (!s) return "";
+
+  if (DATE_FIELDS.has(key)) {
+    return s.replaceAll("-", "/");
+  }
+
+  return s;
+}
+
+function parseSortableDate(value) {
+  if (value == null) return null;
+
+  const s = String(value).trim();
+  if (!s) return null;
+
+  const clean = s.split("T")[0].split(" ")[0].trim();
+
+  // MM/DD/YYYY or MM-DD-YYYY
+  let m = clean.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+  if (m) {
+    const month = Number(m[1]);
+    const day = Number(m[2]);
+    const year = Number(m[3]);
+
+    if (!year || !month || !day) return null;
+
+    // numeric sortable key: YYYYMMDD
+    return year * 10000 + month * 100 + day;
+  }
+
+  // YYYY/MM/DD or YYYY-MM-DD
+  m = clean.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})$/);
+  if (m) {
+    const year = Number(m[1]);
+    const month = Number(m[2]);
+    const day = Number(m[3]);
+
+    if (!year || !month || !day) return null;
+
+    return year * 10000 + month * 100 + day;
+  }
+
+  return null;
+}
+
+function compareValues(a, b, key, dir) {
+  const mult = dir === "desc" ? -1 : 1;
+
+  const aRaw = a?.[key] ?? "";
+  const bRaw = b?.[key] ?? "";
+
+  if (DATE_FIELDS.has(key)) {
+    const aDate = parseSortableDate(aRaw);
+    const bDate = parseSortableDate(bRaw);
+
+    if (aDate == null && bDate == null) return 0;
+    if (aDate == null) return 1;
+    if (bDate == null) return -1;
+
+    if (aDate < bDate) return -1 * mult;
+    if (aDate > bDate) return 1 * mult;
+    return 0;
+  }
+
+  const aStr = String(aRaw).trim().toLowerCase();
+  const bStr = String(bRaw).trim().toLowerCase();
+
+  if (!aStr && !bStr) return 0;
+  if (!aStr) return 1;
+  if (!bStr) return -1;
+
+  return aStr.localeCompare(bStr, undefined, { numeric: true }) * mult;
+}
+
 function DataTable({ items, fields, onCellCommit, pushToast }) {
   const cols = useMemo(() => {
-    // Always include id? Keep visible if you want; for now, keep it hidden from edit columns.
-    // If you want to display id, add it here.
     return Array.isArray(fields) && fields.length ? fields : [];
   }, [fields]);
 
-  const [editing, setEditing] = useState(null); // { r: rowIndex, c: colIndex, id, key }
+  const [editing, setEditing] = useState(null); // { r, c, id, key }
   const [draft, setDraft] = useState("");
+  const [sort, setSort] = useState({ key: "date", dir: "desc" });
+  const inputRefs = useRef({});
 
-  const inputRef = useRef(null);
+  const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 
-  useEffect(() => {
-    if (editing && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
-    }
-  }, [editing]);
+  const sortedItems = useMemo(() => {
+    const arr = Array.isArray(items) ? [...items] : [];
+    if (!sort?.key) return arr;
 
-  const startEdit = useCallback(
+    arr.sort((a, b) => compareValues(a, b, sort.key, sort.dir));
+    return arr;
+  }, [items, sort]);
+
+  const focusCell = useCallback((r, c) => {
+    const key = `${r}-${c}`;
+    const el = inputRefs.current[key];
+    if (el) el.focus();
+  }, []);
+
+  const beginEdit = useCallback(
     (rowIndex, colIndex) => {
-      const row = items[rowIndex];
+      const row = sortedItems[rowIndex];
       const key = cols[colIndex];
       if (!row || !key) return;
 
@@ -41,7 +115,7 @@ function DataTable({ items, fields, onCellCommit, pushToast }) {
       setEditing({ r: rowIndex, c: colIndex, id: row.id, key });
       setDraft(String(current));
     },
-    [items, cols]
+    [sortedItems, cols]
   );
 
   const stopEdit = useCallback(() => {
@@ -49,102 +123,59 @@ function DataTable({ items, fields, onCellCommit, pushToast }) {
     setDraft("");
   }, []);
 
-  const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
-
-  const moveTo = useCallback(
-    (nextR, nextC) => {
-      if (!items.length || !cols.length) return;
-      const r = clamp(nextR, 0, items.length - 1);
-      const c = clamp(nextC, 0, cols.length - 1);
-      startEdit(r, c);
-    },
-    [items.length, cols.length, startEdit]
-  );
-
   const commit = useCallback(
-    async ({ move }) => {
-      if (!editing) return;
+    async ({ move } = {}) => {
+      if (!editing) return true;
 
       const { r, id, key } = editing;
-      const before = String(items?.[r]?.[key] ?? "");
+      const before = String(sortedItems?.[r]?.[key] ?? "");
       const after = String(draft ?? "");
 
-      // If unchanged, just move
-      if (before === after) {
-        if (move) moveTo(move.r, move.c);
-        else stopEdit();
-        return;
-      }
-
       try {
-        await onCellCommit(id, key, after);
-        if (move) moveTo(move.r, move.c);
-        else stopEdit();
+        if (before !== after) {
+          await onCellCommit(id, key, after);
+        }
+
+        if (move) {
+          const nextR = clamp(move.r, 0, sortedItems.length - 1);
+          const nextC = clamp(move.c, 0, cols.length - 1);
+          beginEdit(nextR, nextC);
+          setTimeout(() => focusCell(nextR, nextC), 0);
+        } else {
+          stopEdit();
+        }
+
+        return true;
       } catch (e) {
         pushToast?.("Error", String(e));
-        // keep editing so user can fix
+        return false;
       }
     },
-    [editing, draft, items, onCellCommit, moveTo, stopEdit, pushToast]
+    [
+      editing,
+      sortedItems,
+      draft,
+      onCellCommit,
+      cols.length,
+      sortedItems.length,
+      beginEdit,
+      focusCell,
+      stopEdit,
+      pushToast,
+    ]
   );
 
-  const cancel = useCallback(() => {
-    // revert and stop
-    stopEdit();
-  }, [stopEdit]);
-
-  const onCellKeyDown = useCallback(
-    async (e) => {
-      if (!editing) return;
-
-      const { r, c } = editing;
-
-      // Excel-ish keys
-      if (e.key === "Escape") {
-        e.preventDefault();
-        cancel();
-        return;
+  const toggleSort = useCallback((key) => {
+    setSort((prev) => {
+      if (prev.key === key) {
+        return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
       }
-
-      if (e.key === "Enter") {
-        e.preventDefault();
-        await commit({ move: { r: r + 1, c } });
-        return;
-      }
-
-      if (e.key === "Tab") {
-        e.preventDefault();
-        const dir = e.shiftKey ? -1 : 1;
-        await commit({ move: { r, c: c + dir } });
-        return;
-      }
-
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        await commit({ move: { r: r + 1, c } });
-        return;
-      }
-
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        await commit({ move: { r: r - 1, c } });
-        return;
-      }
-
-      if (e.key === "ArrowRight") {
-        e.preventDefault();
-        await commit({ move: { r, c: c + 1 } });
-        return;
-      }
-
-      if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        await commit({ move: { r, c: c - 1 } });
-        return;
-      }
-    },
-    [editing, commit, cancel]
-  );
+      return {
+        key,
+        dir: DATE_FIELDS.has(key) ? "desc" : "asc",
+      };
+    });
+  }, []);
 
   const prettyLabel = (k) => k.replaceAll("_", " ").toUpperCase();
 
@@ -153,48 +184,136 @@ function DataTable({ items, fields, onCellCommit, pushToast }) {
       <table className="table">
         <thead>
           <tr>
-            {cols.map((k) => (
-              <th key={k}>{prettyLabel(k)}</th>
-            ))}
+            {cols.map((k) => {
+              const isSorted = sort.key === k;
+              const arrow = isSorted ? (sort.dir === "asc" ? " ▲" : " ▼") : "";
+
+              return (
+                <th
+                  key={k}
+                  onClick={() => toggleSort(k)}
+                  style={{ cursor: "pointer", userSelect: "none" }}
+                  title={`Sort by ${prettyLabel(k)}`}
+                >
+                  {prettyLabel(k)}
+                  {arrow}
+                </th>
+              );
+            })}
           </tr>
         </thead>
 
         <tbody>
-          {(items || []).map((row, rowIndex) => (
+          {sortedItems.map((row, rowIndex) => (
             <tr key={row.id ?? rowIndex}>
               {cols.map((key, colIndex) => {
                 const isEditing =
-                  editing && editing.r === rowIndex && editing.c === colIndex;
+                  editing &&
+                  editing.r === rowIndex &&
+                  editing.c === colIndex;
 
-                const value = row?.[key] ?? "";
+                const value = isEditing
+                  ? draft
+                  : formatDisplayValue(key, row?.[key] ?? "");
 
                 return (
                   <td
                     key={`${row.id ?? rowIndex}-${key}`}
                     className={isEditing ? "td-editing" : ""}
-                    onMouseDown={(e) => {
-                      // prevent text selection + keep it snappy
-                      e.preventDefault();
-                      startEdit(rowIndex, colIndex);
-                    }}
                   >
-                    {isEditing ? (
-                      <div className="cell-edit">
-                        <input
-                          ref={inputRef}
-                          className="cell-input"
-                          value={draft}
-                          onChange={(e) => setDraft(e.target.value)}
-                          onKeyDown={onCellKeyDown}
-                          onBlur={() => {
-                            // blur commits but stays on same cell
-                            commit({ move: null });
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      <span className="cell-text">{String(value || "")}</span>
-                    )}
+                    <input
+                      ref={(el) => {
+                        inputRefs.current[`${rowIndex}-${colIndex}`] = el;
+                      }}
+                      className={`cell-input ${isEditing ? "cell-input--editing" : "cell-input--idle"}`}
+                      value={value}
+                      readOnly={!isEditing}
+                      onFocus={() => {
+                        if (!isEditing) beginEdit(rowIndex, colIndex);
+                      }}
+                      onClick={() => {
+                        if (!isEditing) beginEdit(rowIndex, colIndex);
+                      }}
+                      onChange={(e) => {
+                        if (isEditing) setDraft(e.target.value);
+                      }}
+                      onBlur={async () => {
+                        if (isEditing) {
+                          await commit();
+                        }
+                      }}
+                      onKeyDown={async (e) => {
+                        const r = rowIndex;
+                        const c = colIndex;
+
+                        if (!isEditing) {
+                          if (
+                            e.key === "Enter" ||
+                            e.key === "F2" ||
+                            e.key.length === 1
+                          ) {
+                            beginEdit(r, c);
+                          }
+                          return;
+                        }
+
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          stopEdit();
+                          return;
+                        }
+
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          await commit({ move: { r: r + 1, c } });
+                          return;
+                        }
+
+                        if (e.key === "Tab") {
+                          e.preventDefault();
+                          const dir = e.shiftKey ? -1 : 1;
+                          await commit({ move: { r, c: c + dir } });
+                          return;
+                        }
+
+                        if (e.key === "ArrowDown") {
+                          e.preventDefault();
+                          await commit({ move: { r: r + 1, c } });
+                          return;
+                        }
+
+                        if (e.key === "ArrowUp") {
+                          e.preventDefault();
+                          await commit({ move: { r: r - 1, c } });
+                          return;
+                        }
+
+                        if (e.key === "ArrowRight") {
+                          const input = e.currentTarget;
+                          const atEnd =
+                            input.selectionStart === input.value.length &&
+                            input.selectionEnd === input.value.length;
+
+                          if (atEnd) {
+                            e.preventDefault();
+                            await commit({ move: { r, c: c + 1 } });
+                          }
+                          return;
+                        }
+
+                        if (e.key === "ArrowLeft") {
+                          const input = e.currentTarget;
+                          const atStart =
+                            input.selectionStart === 0 &&
+                            input.selectionEnd === 0;
+
+                          if (atStart) {
+                            e.preventDefault();
+                            await commit({ move: { r, c: c - 1 } });
+                          }
+                        }
+                      }}
+                    />
                   </td>
                 );
               })}

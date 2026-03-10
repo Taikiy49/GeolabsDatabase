@@ -6,17 +6,12 @@ from pathlib import Path
 
 import pandas as pd
 
-# ====== SETTINGS ======
 SCRIPT_DIR = Path(__file__).resolve().parent
-
-# DB created in same folder as this script (same as your old style)
 DB_PATH = str(SCRIPT_DIR / "pnp.db")
 TABLE = "pnp_table"
 
-# Default Excel path (so you can just run the file)
-DEFAULT_XLSX = r"C:\Users\tyamashita\Desktop\GeolabsSoftwares\GeolabsDatabase\backend\DBConverter\PR Data Base 2-10.xlsx"
+DEFAULT_XLSX = r"C:\Users\tyamashita\Desktop\GeolabsSoftwares\GeolabsDatabase\backend\DBConverter\PR Data Base 3-10.xlsx"
 
-# Column mapping: Excel headers -> DB columns
 COLUMN_MAP = {
     "Date": "date",
     "Client": "client",
@@ -26,18 +21,26 @@ COLUMN_MAP = {
     "Work Order #": "work_order_number",
     "Work Order Number": "work_order_number",
     "Report Date": "report_date",
+    "Final Report Date": "report_date",
     "Invoice #": "invoice_number",
     "Invoice Number": "invoice_number",
     "Principal Engineer": "principal_engineer",
 }
 
 FIELDS = [
-    "date", "client", "project_name", "pr_number",
-    "work_order_number", "report_date", "invoice_number",
+    "date",
+    "client",
+    "project_name",
+    "pr_number",
+    "work_order_number",
+    "report_date",
+    "invoice_number",
     "principal_engineer",
 ]
 
-# ====== DB SCHEMA (UNCHANGED FROM YOUR ORIGINAL) ======
+DATE_FIELDS = {"date", "report_date"}
+
+
 def ensure_schema(db: sqlite3.Connection):
     db.execute(f"""
         CREATE TABLE IF NOT EXISTS {TABLE} (
@@ -66,12 +69,44 @@ def ensure_schema(db: sqlite3.Connection):
         if col not in cols:
             db.execute(f"ALTER TABLE {TABLE} ADD COLUMN {col} {ddl}")
 
-    db.execute(f"UPDATE {TABLE} SET created_at = datetime('now') WHERE created_at IS NULL OR TRIM(created_at)=''")
-    db.execute(f"UPDATE {TABLE} SET updated_at = datetime('now') WHERE updated_at IS NULL OR TRIM(updated_at)=''")
+    db.execute(
+        f"UPDATE {TABLE} SET created_at = datetime('now') "
+        f"WHERE created_at IS NULL OR TRIM(created_at) = ''"
+    )
+    db.execute(
+        f"UPDATE {TABLE} SET updated_at = datetime('now') "
+        f"WHERE updated_at IS NULL OR TRIM(updated_at) = ''"
+    )
 
-# ====== NORMALIZATION ======
+
+def normalize_date_value(value) -> str:
+    if pd.isna(value):
+        return ""
+
+    s = str(value).strip()
+    if not s:
+        return ""
+
+    dt = pd.to_datetime(s, errors="coerce")
+    if pd.notna(dt):
+        return dt.strftime("%m/%d/%Y")
+
+    if "T" in s:
+        s = s.split("T")[0].strip()
+    if " " in s:
+        s = s.split(" ")[0].strip()
+
+    try:
+        dt = pd.to_datetime(s, errors="coerce")
+        if pd.notna(dt):
+            return dt.strftime("%m/%d/%Y")
+    except Exception:
+        pass
+
+    return s
+
+
 def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
-    # Rename columns using map (case sensitive -> relaxed)
     rename = {}
     for c in df.columns:
         c2 = str(c).strip()
@@ -83,35 +118,69 @@ def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
                 if key == k.lower():
                     rename[c] = v
                     break
+
     df = df.rename(columns=rename)
 
-    # Keep only known fields
     keep = [c for c in FIELDS if c in df.columns]
     df = df[keep].copy()
 
-    # Ensure all fields exist
     for f in FIELDS:
         if f not in df.columns:
             df[f] = ""
 
-    # Clean values
     for f in FIELDS:
-        df[f] = df[f].fillna("").astype(str).map(lambda x: x.strip())
+        if f in DATE_FIELDS:
+            df[f] = df[f].map(normalize_date_value)
+        else:
+            df[f] = df[f].fillna("").astype(str).map(lambda x: x.strip())
 
-    # Drop fully empty rows (safe)
-    df = df[~df.apply(lambda r: all((str(r[f]).strip() == "" for f in FIELDS)), axis=1)]
+    df = df[
+        ~df.apply(
+            lambda r: all(str(r[f]).strip() == "" for f in FIELDS),
+            axis=1,
+        )
+    ]
 
     return df[FIELDS]
 
-# ====== IMPORT ======
-def import_xlsx(xlsx_path: str, sheet_name: str | int | None = None):
-    # Force a DataFrame (prevents dict return when sheet_name=None)
+
+def clean_existing_dates(db: sqlite3.Connection):
+    rows = db.execute(f"SELECT id, date, report_date FROM {TABLE}").fetchall()
+
+    for r in rows:
+        updates = {}
+
+        for field in DATE_FIELDS:
+            value = r["date"] if field == "date" else r["report_date"]
+            if not value:
+                continue
+
+            try:
+                dt = pd.to_datetime(value, errors="coerce")
+                if pd.notna(dt):
+                    updates[field] = dt.strftime("%m/%d/%Y")
+            except Exception:
+                pass
+
+        if updates:
+            sets = ", ".join([f"{k} = ?" for k in updates])
+            db.execute(
+                f"UPDATE {TABLE} SET {sets} WHERE id = ?",
+                list(updates.values()) + [r["id"]],
+            )
+
+
+def import_xlsx(xlsx_path: str, sheet_name: str | int | None = None, replace_existing: bool = True):
     df = pd.read_excel(xlsx_path, sheet_name=(sheet_name or 0), engine="openpyxl")
     df = normalize_df(df)
 
     db = sqlite3.connect(DB_PATH)
+    db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL;")
     ensure_schema(db)
+
+    if replace_existing:
+        db.execute(f"DELETE FROM {TABLE}")
 
     placeholders = ",".join(["?"] * len(FIELDS))
     sql = f"""
@@ -121,25 +190,22 @@ def import_xlsx(xlsx_path: str, sheet_name: str | int | None = None):
 
     rows = df.to_records(index=False)
     db.executemany(sql, [tuple(r) for r in rows])
+
+    clean_existing_dates(db)
     db.commit()
     db.close()
 
     print(f"✅ Imported {len(df)} rows into {DB_PATH}:{TABLE}")
 
+
 def resolve_default_xlsx() -> str:
-    # If the Excel exists in the same folder as this .py, use that first
     local = SCRIPT_DIR / Path(DEFAULT_XLSX).name
     if local.exists():
         return str(local)
     return DEFAULT_XLSX
 
+
 if __name__ == "__main__":
-    # Run with no args:
-    #   python xlsx_to_db.py
-    #
-    # Or with args:
-    #   python xlsx_to_db.py <path_to_excel.xlsx> [sheet_name]
-    #
     if len(sys.argv) < 2:
         xlsx = resolve_default_xlsx()
         sheet = None
@@ -147,4 +213,4 @@ if __name__ == "__main__":
         xlsx = sys.argv[1]
         sheet = sys.argv[2] if len(sys.argv) >= 3 else None
 
-    import_xlsx(xlsx, sheet_name=sheet)
+    import_xlsx(xlsx, sheet_name=sheet, replace_existing=True)

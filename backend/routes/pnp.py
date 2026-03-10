@@ -1,4 +1,3 @@
-# routes/pnp.py
 from __future__ import annotations
 
 import json
@@ -25,6 +24,8 @@ FIELDS = [
     "principal_engineer",
 ]
 
+DATE_FIELDS = {"date", "report_date"}
+
 PRETTY = {
     "date": "Date",
     "client": "Client",
@@ -36,18 +37,43 @@ PRETTY = {
     "principal_engineer": "Engineer",
 }
 
-# ------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------
 
 def row_to_dict(r: sqlite3.Row) -> dict:
     return {k: r[k] for k in r.keys()}
 
+
 def now_sql() -> str:
     return "datetime('now')"
 
+
+def normalize_date_string(value: Any) -> str:
+    if value is None:
+        return ""
+
+    s = str(value).strip()
+    if not s:
+        return ""
+
+    if "T" in s:
+        s = s.split("T")[0].strip()
+
+    if " " in s:
+        s = s.split(" ")[0].strip()
+
+    return s
+
+
+def normalize_row_dates(row: Optional[dict]) -> Optional[dict]:
+    if row is None:
+        return None
+
+    out = dict(row)
+    for field in DATE_FIELDS:
+        out[field] = normalize_date_string(out.get(field, ""))
+    return out
+
+
 def ensure_schema(db: sqlite3.Connection) -> None:
-    # --- main table ---
     db.execute(f"""
         CREATE TABLE IF NOT EXISTS {TABLE} (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,7 +91,6 @@ def ensure_schema(db: sqlite3.Connection) -> None:
         )
     """)
 
-    # --- history table (with who did it) ---
     db.execute(f"""
         CREATE TABLE IF NOT EXISTS {HISTORY_TABLE} (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,16 +100,13 @@ def ensure_schema(db: sqlite3.Connection) -> None:
             after_json TEXT,
             changed_fields_json TEXT,
             summary TEXT,
-
             user_email TEXT,
             user_name TEXT,
             user_oid TEXT,
-
             changed_at TEXT DEFAULT (datetime('now'))
         )
     """)
 
-    # --- undo/redo stack (with who did original action) ---
     db.execute(f"""
         CREATE TABLE IF NOT EXISTS {UNDO_TABLE} (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,17 +116,14 @@ def ensure_schema(db: sqlite3.Connection) -> None:
             after_json TEXT,
             changed_fields_json TEXT,
             summary TEXT,
-
             user_email TEXT,
             user_name TEXT,
             user_oid TEXT,
-
             changed_at TEXT,
             undone_at TEXT DEFAULT (datetime('now'))
         )
     """)
 
-    # --- migrations for main table ---
     main_cols = [r["name"] for r in db.execute(f"PRAGMA table_info({TABLE})").fetchall()]
     needed_main = {
         "created_at": "TEXT DEFAULT (datetime('now'))",
@@ -115,28 +134,40 @@ def ensure_schema(db: sqlite3.Connection) -> None:
         if col not in main_cols:
             db.execute(f"ALTER TABLE {TABLE} ADD COLUMN {col} {ddl}")
 
-    # --- migrations for history ---
     hist_cols = [r["name"] for r in db.execute(f"PRAGMA table_info({HISTORY_TABLE})").fetchall()]
     for col in ["changed_fields_json", "summary", "user_email", "user_name", "user_oid"]:
         if col not in hist_cols:
             db.execute(f"ALTER TABLE {HISTORY_TABLE} ADD COLUMN {col} TEXT")
 
-    # --- migrations for undo stack ---
     undo_cols = [r["name"] for r in db.execute(f"PRAGMA table_info({UNDO_TABLE})").fetchall()]
     for col in ["changed_fields_json", "summary", "user_email", "user_name", "user_oid"]:
         if col not in undo_cols:
             db.execute(f"ALTER TABLE {UNDO_TABLE} ADD COLUMN {col} TEXT")
 
-    # --- backfill timestamps in main table ---
     db.execute(f"UPDATE {TABLE} SET created_at = {now_sql()} WHERE created_at IS NULL OR TRIM(created_at) = ''")
     db.execute(f"UPDATE {TABLE} SET updated_at = {now_sql()} WHERE updated_at IS NULL OR TRIM(updated_at) = ''")
+
+    # Clean existing stored datetime strings down to YYYY-MM-DD
+    for field in DATE_FIELDS:
+        db.execute(f"""
+            UPDATE {TABLE}
+            SET {field} = CASE
+                WHEN {field} IS NULL OR TRIM({field}) = '' THEN ''
+                ELSE substr(trim({field}), 1, 10)
+            END
+        """)
+
 
 def clean_payload(payload: Dict[str, Any]) -> Dict[str, str]:
     out: Dict[str, str] = {}
     for k in FIELDS:
         if k in payload:
-            out[k] = (payload.get(k) or "").strip()
+            val = (payload.get(k) or "").strip()
+            if k in DATE_FIELDS:
+                val = normalize_date_string(val)
+            out[k] = val
     return out
+
 
 def fetch_one(db: sqlite3.Connection, project_id: int) -> Optional[sqlite3.Row]:
     return db.execute(
@@ -144,10 +175,12 @@ def fetch_one(db: sqlite3.Connection, project_id: int) -> Optional[sqlite3.Row]:
         (project_id,),
     ).fetchone()
 
+
 def _norm(v: Any) -> str:
     if v is None:
         return ""
     return str(v).strip()
+
 
 def diff_fields(before: Optional[dict], after: Optional[dict]) -> List[dict]:
     b = before or {}
@@ -169,6 +202,7 @@ def diff_fields(before: Optional[dict], after: Optional[dict]) -> List[dict]:
             })
     return changes
 
+
 def build_summary(action: str, before: Optional[dict], after: Optional[dict]) -> str:
     base = before if action == "delete" else after
     base = base or {}
@@ -185,13 +219,12 @@ def build_summary(action: str, before: Optional[dict], after: Optional[dict]) ->
     s = " • ".join([b for b in bits if b])
     return s or "Project change"
 
-# ✅ IMPORTANT: actor comes from headers set by the React app (MSAL)
+
 def _actor_from_request() -> Dict[str, str]:
     email = (request.headers.get("X-User-Email") or "").strip()
     name = (request.headers.get("X-User-Name") or "").strip()
     oid = (request.headers.get("X-User-Oid") or "").strip()
 
-    # fallback to your old plan if you later add request.msal_claims middleware
     if not (email or name or oid):
         claims = getattr(request, "msal_claims", {}) or {}
         email = claims.get("preferred_username") or claims.get("upn") or claims.get("email") or ""
@@ -200,6 +233,7 @@ def _actor_from_request() -> Dict[str, str]:
 
     return {"email": str(email or ""), "name": str(name or ""), "oid": str(oid or "")}
 
+
 def write_history(
     db: sqlite3.Connection,
     project_id: int,
@@ -207,6 +241,9 @@ def write_history(
     before_row: Optional[dict],
     after_row: Optional[dict],
 ) -> None:
+    before_row = normalize_row_dates(before_row)
+    after_row = normalize_row_dates(after_row)
+
     changes = diff_fields(before_row, after_row)
     summary = build_summary(action, before_row, after_row)
 
@@ -236,8 +273,8 @@ def write_history(
         ),
     )
 
-    # new change clears redo stack
     db.execute(f"DELETE FROM {UNDO_TABLE}")
+
 
 def history_row_to_ui(r: sqlite3.Row) -> dict:
     return {
@@ -249,16 +286,11 @@ def history_row_to_ui(r: sqlite3.Row) -> dict:
         "changes": json.loads(r["changed_fields_json"]) if r["changed_fields_json"] else [],
         "before": json.loads(r["before_json"]) if r["before_json"] else None,
         "after": json.loads(r["after_json"]) if r["after_json"] else None,
-
-        # ✅ who
         "username": r["user_email"] or "",
         "name": r["user_name"] or "",
         "oid": r["user_oid"] or "",
     }
 
-# ------------------------------------------------------------
-# Hooks
-# ------------------------------------------------------------
 
 @projects_bp.before_app_request
 def _ensure_db_schema() -> None:
@@ -266,9 +298,6 @@ def _ensure_db_schema() -> None:
     ensure_schema(db)
     db.commit()
 
-# ------------------------------------------------------------
-# Routes
-# ------------------------------------------------------------
 
 @projects_bp.get("")
 def list_projects():
@@ -304,17 +333,25 @@ def list_projects():
         LIMIT ? OFFSET ?
     """, params + [page_size, offset]).fetchall()
 
+    items = []
+    for r in rows:
+        items.append(normalize_row_dates(row_to_dict(r)))
+
     return jsonify({
         "page": page,
         "page_size": page_size,
         "total": total,
-        "items": [row_to_dict(r) for r in rows],
+        "items": items,
     })
+
 
 @projects_bp.post("")
 def create_project():
     payload = request.get_json(force=True) or {}
-    data = {k: (payload.get(k) or "").strip() for k in FIELDS}
+    data = clean_payload(payload)
+    for k in FIELDS:
+        if k not in data:
+            data[k] = ""
 
     db = get_db()
     cur = db.execute(
@@ -332,7 +369,8 @@ def create_project():
         db.commit()
 
     row2 = fetch_one(db, cur.lastrowid)
-    return jsonify(row_to_dict(row2)), 201
+    return jsonify(normalize_row_dates(row_to_dict(row2))), 201
+
 
 @projects_bp.patch("/<int:project_id>")
 def patch_project(project_id: int):
@@ -357,7 +395,8 @@ def patch_project(project_id: int):
     write_history(db, project_id, "update", row_to_dict(before), row_to_dict(after))
     db.commit()
 
-    return jsonify(row_to_dict(after))
+    return jsonify(normalize_row_dates(row_to_dict(after)))
+
 
 @projects_bp.put("/<int:project_id>")
 def update_project(project_id: int):
@@ -382,7 +421,8 @@ def update_project(project_id: int):
     write_history(db, project_id, "update", row_to_dict(before), row_to_dict(after))
     db.commit()
 
-    return jsonify(row_to_dict(after))
+    return jsonify(normalize_row_dates(row_to_dict(after)))
+
 
 @projects_bp.delete("/<int:project_id>")
 def delete_project(project_id: int):
@@ -400,9 +440,6 @@ def delete_project(project_id: int):
 
     return jsonify({"ok": True})
 
-# ------------------------------------------------------------
-# History + Undo/Redo
-# ------------------------------------------------------------
 
 @projects_bp.get("/history")
 def get_history():
@@ -440,6 +477,7 @@ def get_history():
         "items": [history_row_to_ui(r) for r in rows],
     })
 
+
 @projects_bp.post("/undo")
 def undo_last():
     db = get_db()
@@ -454,7 +492,6 @@ def undo_last():
     after = json.loads(last["after_json"]) if last["after_json"] else None
     changed_at = last["changed_at"]
 
-    # store into redo stack, preserving who did it originally
     db.execute(
         f"""
         INSERT INTO {UNDO_TABLE}
@@ -479,6 +516,7 @@ def undo_last():
     if action == "update":
         if not before:
             return jsonify({"error": "Cannot undo update (missing before state)"}), 400
+        before = normalize_row_dates(before)
         sets = ", ".join([f"{k} = ?" for k in FIELDS] + ["is_deleted = 0", f"updated_at = {now_sql()}"])
         vals = [before.get(k, "") or "" for k in FIELDS] + [project_id]
         db.execute(f"UPDATE {TABLE} SET {sets} WHERE id = ?", vals)
@@ -489,6 +527,7 @@ def undo_last():
     elif action == "delete":
         db.execute(f"UPDATE {TABLE} SET is_deleted = 0, updated_at = {now_sql()} WHERE id = ?", (project_id,))
         if before:
+            before = normalize_row_dates(before)
             sets = ", ".join([f"{k} = ?" for k in FIELDS])
             vals = [before.get(k, "") or "" for k in FIELDS] + [project_id]
             db.execute(f"UPDATE {TABLE} SET {sets} WHERE id = ?", vals)
@@ -500,6 +539,7 @@ def undo_last():
     db.commit()
 
     return jsonify({"ok": True, "undid": {"action": action, "project_id": project_id}})
+
 
 @projects_bp.post("/redo")
 def redo_last():
@@ -514,12 +554,12 @@ def redo_last():
     before = json.loads(last["before_json"]) if last["before_json"] else None
     after = json.loads(last["after_json"]) if last["after_json"] else None
 
-    # when redoing, the actor is whoever clicked redo now
     actor = _actor_from_request()
 
     if action == "update":
         if not after:
             return jsonify({"error": "Cannot redo update (missing after state)"}), 400
+        after = normalize_row_dates(after)
         sets = ", ".join([f"{k} = ?" for k in FIELDS] + ["is_deleted = 0", f"updated_at = {now_sql()}"])
         vals = [after.get(k, "") or "" for k in FIELDS] + [project_id]
         db.execute(f"UPDATE {TABLE} SET {sets} WHERE id = ?", vals)
@@ -534,7 +574,7 @@ def redo_last():
             (
                 project_id,
                 "update",
-                json.dumps(before) if before else None,
+                json.dumps(normalize_row_dates(before)) if before else None,
                 json.dumps(after) if after else None,
                 last["changed_fields_json"],
                 last["summary"],
@@ -547,6 +587,7 @@ def redo_last():
     elif action == "create":
         db.execute(f"UPDATE {TABLE} SET is_deleted = 0, updated_at = {now_sql()} WHERE id = ?", (project_id,))
         if after:
+            after = normalize_row_dates(after)
             sets = ", ".join([f"{k} = ?" for k in FIELDS])
             vals = [after.get(k, "") or "" for k in FIELDS] + [project_id]
             db.execute(f"UPDATE {TABLE} SET {sets} WHERE id = ?", vals)
@@ -584,8 +625,8 @@ def redo_last():
             (
                 project_id,
                 "delete",
-                json.dumps(before) if before else None,
-                json.dumps(after) if after else None,
+                json.dumps(normalize_row_dates(before)) if before else None,
+                json.dumps(normalize_row_dates(after)) if after else None,
                 last["changed_fields_json"],
                 last["summary"],
                 actor["email"],
