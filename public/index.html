@@ -4,19 +4,15 @@
     <meta charset="utf-8" />
     <link rel="icon" type="image/png" href="%PUBLIC_URL%/geolabs.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-
     <meta name="theme-color" content="#0a0a0a" />
     <meta
       name="description"
       content="Geolabs Database — Internal data platform for managing and searching engineering reports, documents, and project information."
     />
-
     <link rel="apple-touch-icon" href="%PUBLIC_URL%/geolabs.png" />
     <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
-
     <title>Geolabs Database</title>
 
-    <!-- Google Font (optional but nice) -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link
       href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap"
@@ -30,32 +26,11 @@
         background: #0f1115;
         color: white;
       }
-
-      #loading {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        text-align: center;
-        opacity: 0.7;
-      }
-
-      #loading img {
-        width: 80px;
-        margin-bottom: 15px;
-      }
     </style>
   </head>
 
   <body>
     <noscript>You need to enable JavaScript to run the Geolabs Database.</noscript>
-
-    <!-- Optional loading screen -->
-    <div id="loading">
-      <img src="%PUBLIC_URL%/geolabs.png" alt="Geolabs Logo" />
-      <div>Loading Geolabs Database...</div>
-    </div>
-
     <div id="root"></div>
   </body>
 </html>
