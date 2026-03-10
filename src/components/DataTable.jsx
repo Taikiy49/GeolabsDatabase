@@ -29,9 +29,18 @@ function parseSortableDate(value) {
     const day = Number(m[2]);
     const year = Number(m[3]);
 
-    if (!year || !month || !day) return null;
+    if (
+      !Number.isInteger(month) ||
+      !Number.isInteger(day) ||
+      !Number.isInteger(year) ||
+      month < 1 ||
+      month > 12 ||
+      day < 1 ||
+      day > 31
+    ) {
+      return null;
+    }
 
-    // numeric sortable key: YYYYMMDD
     return year * 10000 + month * 100 + day;
   }
 
@@ -42,7 +51,17 @@ function parseSortableDate(value) {
     const month = Number(m[2]);
     const day = Number(m[3]);
 
-    if (!year || !month || !day) return null;
+    if (
+      !Number.isInteger(month) ||
+      !Number.isInteger(day) ||
+      !Number.isInteger(year) ||
+      month < 1 ||
+      month > 12 ||
+      day < 1 ||
+      day > 31
+    ) {
+      return null;
+    }
 
     return year * 10000 + month * 100 + day;
   }
@@ -51,7 +70,7 @@ function parseSortableDate(value) {
 }
 
 function compareValues(a, b, key, dir) {
-  const mult = dir === "desc" ? -1 : 1;
+  const multiplier = dir === "desc" ? -1 : 1;
 
   const aRaw = a?.[key] ?? "";
   const bRaw = b?.[key] ?? "";
@@ -64,8 +83,8 @@ function compareValues(a, b, key, dir) {
     if (aDate == null) return 1;
     if (bDate == null) return -1;
 
-    if (aDate < bDate) return -1 * mult;
-    if (aDate > bDate) return 1 * mult;
+    if (aDate < bDate) return -1 * multiplier;
+    if (aDate > bDate) return 1 * multiplier;
     return 0;
   }
 
@@ -76,7 +95,7 @@ function compareValues(a, b, key, dir) {
   if (!aStr) return 1;
   if (!bStr) return -1;
 
-  return aStr.localeCompare(bStr, undefined, { numeric: true }) * mult;
+  return aStr.localeCompare(bStr, undefined, { numeric: true }) * multiplier;
 }
 
 function DataTable({ items, fields, onCellCommit, pushToast }) {
@@ -100,8 +119,8 @@ function DataTable({ items, fields, onCellCommit, pushToast }) {
   }, [items, sort]);
 
   const focusCell = useCallback((r, c) => {
-    const key = `${r}-${c}`;
-    const el = inputRefs.current[key];
+    const refKey = `${r}-${c}`;
+    const el = inputRefs.current[refKey];
     if (el) el.focus();
   }, []);
 
@@ -156,8 +175,8 @@ function DataTable({ items, fields, onCellCommit, pushToast }) {
       sortedItems,
       draft,
       onCellCommit,
-      cols.length,
       sortedItems.length,
+      cols.length,
       beginEdit,
       focusCell,
       stopEdit,
@@ -225,7 +244,9 @@ function DataTable({ items, fields, onCellCommit, pushToast }) {
                       ref={(el) => {
                         inputRefs.current[`${rowIndex}-${colIndex}`] = el;
                       }}
-                      className={`cell-input ${isEditing ? "cell-input--editing" : "cell-input--idle"}`}
+                      className={`cell-input ${
+                        isEditing ? "cell-input--editing" : "cell-input--idle"
+                      }`}
                       value={value}
                       readOnly={!isEditing}
                       onFocus={() => {
