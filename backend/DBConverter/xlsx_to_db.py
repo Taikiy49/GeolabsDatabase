@@ -78,6 +78,12 @@ def ensure_schema(db: sqlite3.Connection):
         f"WHERE updated_at IS NULL OR TRIM(updated_at) = ''"
     )
 
+    db.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_date ON {TABLE}(date)")
+    db.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_report_date ON {TABLE}(report_date)")
+    db.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_client ON {TABLE}(client)")
+    db.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_pr ON {TABLE}(pr_number)")
+    db.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_wo ON {TABLE}(work_order_number)")
+
 
 def normalize_date_value(value) -> str:
     if pd.isna(value):
@@ -87,9 +93,12 @@ def normalize_date_value(value) -> str:
     if not s:
         return ""
 
-    dt = pd.to_datetime(s, errors="coerce")
-    if pd.notna(dt):
-        return dt.strftime("%m/%d/%Y")
+    try:
+        dt = pd.to_datetime(s, errors="coerce")
+        if pd.notna(dt):
+            return dt.strftime("%Y-%m-%d")
+    except Exception:
+        pass
 
     if "T" in s:
         s = s.split("T")[0].strip()
@@ -99,11 +108,17 @@ def normalize_date_value(value) -> str:
     try:
         dt = pd.to_datetime(s, errors="coerce")
         if pd.notna(dt):
-            return dt.strftime("%m/%d/%Y")
+            return dt.strftime("%Y-%m-%d")
     except Exception:
         pass
 
-    return s
+    return ""
+
+
+def normalize_text_value(value) -> str:
+    if pd.isna(value):
+        return ""
+    return str(value).strip()
 
 
 def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -132,7 +147,7 @@ def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
         if f in DATE_FIELDS:
             df[f] = df[f].map(normalize_date_value)
         else:
-            df[f] = df[f].fillna("").astype(str).map(lambda x: x.strip())
+            df[f] = df[f].map(normalize_text_value)
 
     df = df[
         ~df.apply(
@@ -152,20 +167,17 @@ def clean_existing_dates(db: sqlite3.Connection):
 
         for field in DATE_FIELDS:
             value = r["date"] if field == "date" else r["report_date"]
-            if not value:
+            if value is None or str(value).strip() == "":
                 continue
 
-            try:
-                dt = pd.to_datetime(value, errors="coerce")
-                if pd.notna(dt):
-                    updates[field] = dt.strftime("%m/%d/%Y")
-            except Exception:
-                pass
+            cleaned = normalize_date_value(value)
+            if cleaned:
+                updates[field] = cleaned
 
         if updates:
             sets = ", ".join([f"{k} = ?" for k in updates])
             db.execute(
-                f"UPDATE {TABLE} SET {sets} WHERE id = ?",
+                f"UPDATE {TABLE} SET {sets}, updated_at = datetime('now') WHERE id = ?",
                 list(updates.values()) + [r["id"]],
             )
 
@@ -177,6 +189,7 @@ def import_xlsx(xlsx_path: str, sheet_name: str | int | None = None, replace_exi
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL;")
+    db.execute("PRAGMA foreign_keys = ON;")
     ensure_schema(db)
 
     if replace_existing:

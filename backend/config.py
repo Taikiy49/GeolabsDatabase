@@ -32,4 +32,4 @@ class Config:
     PR_TABLE = os.getenv("GEO_PR_TABLE", "pr_data")
 
     # App URL info
-    API_BASE_URL = os.getenv("GEO_API_BASE_URL", "http://localhost:5000")
+    API_BASE_URL = os.getenv("GEO_API_BASE_URL", "http://localhost:7000")

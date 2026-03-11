@@ -46,6 +46,8 @@ def now_sql() -> str:
     return "datetime('now')"
 
 
+import pandas as pd
+
 def normalize_date_string(value: Any) -> str:
     if value is None:
         return ""
@@ -54,14 +56,26 @@ def normalize_date_string(value: Any) -> str:
     if not s:
         return ""
 
+    try:
+        dt = pd.to_datetime(s, errors="coerce")
+        if pd.notna(dt):
+            return dt.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+
     if "T" in s:
         s = s.split("T")[0].strip()
-
     if " " in s:
         s = s.split(" ")[0].strip()
 
-    return s
+    try:
+        dt = pd.to_datetime(s, errors="coerce")
+        if pd.notna(dt):
+            return dt.strftime("%Y-%m-%d")
+    except Exception:
+        pass
 
+    return ""
 
 def normalize_row_dates(row: Optional[dict]) -> Optional[dict]:
     if row is None:
@@ -144,19 +158,31 @@ def ensure_schema(db: sqlite3.Connection) -> None:
         if col not in undo_cols:
             db.execute(f"ALTER TABLE {UNDO_TABLE} ADD COLUMN {col} TEXT")
 
-    db.execute(f"UPDATE {TABLE} SET created_at = {now_sql()} WHERE created_at IS NULL OR TRIM(created_at) = ''")
-    db.execute(f"UPDATE {TABLE} SET updated_at = {now_sql()} WHERE updated_at IS NULL OR TRIM(updated_at) = ''")
+    db.execute(f"CREATE INDEX IF NOT EXISTS idx_pnp_date ON {TABLE}(date)")
+    db.execute(f"CREATE INDEX IF NOT EXISTS idx_pnp_report_date ON {TABLE}(report_date)")
+    db.execute(f"CREATE INDEX IF NOT EXISTS idx_pnp_client ON {TABLE}(client)")
+    db.execute(f"CREATE INDEX IF NOT EXISTS idx_pnp_pr ON {TABLE}(pr_number)")
+    db.execute(f"CREATE INDEX IF NOT EXISTS idx_pnp_wo ON {TABLE}(work_order_number)")
+    db.execute(f"CREATE INDEX IF NOT EXISTS idx_pnp_history_project ON {HISTORY_TABLE}(project_id)")
+    db.execute(f"CREATE INDEX IF NOT EXISTS idx_pnp_history_changed_at ON {HISTORY_TABLE}(changed_at)")
+    db.execute(f"CREATE INDEX IF NOT EXISTS idx_pnp_undo_undone_at ON {UNDO_TABLE}(undone_at)")
 
-    # Clean existing stored datetime strings down to YYYY-MM-DD
-    for field in DATE_FIELDS:
-        db.execute(f"""
+
+def normalize_existing_dates(db: sqlite3.Connection) -> None:
+    rows = db.execute(f"SELECT id, date, report_date FROM {TABLE}").fetchall()
+
+    for row in rows:
+        new_date = normalize_date_string(row["date"])
+        new_report_date = normalize_date_string(row["report_date"])
+
+        db.execute(
+            f"""
             UPDATE {TABLE}
-            SET {field} = CASE
-                WHEN {field} IS NULL OR TRIM({field}) = '' THEN ''
-                ELSE substr(trim({field}), 1, 10)
-            END
-        """)
-
+            SET date = ?, report_date = ?
+            WHERE id = ?
+            """,
+            (new_date, new_report_date, row["id"]),
+        )
 
 def clean_payload(payload: Dict[str, Any]) -> Dict[str, str]:
     out: Dict[str, str] = {}
@@ -291,12 +317,6 @@ def history_row_to_ui(r: sqlite3.Row) -> dict:
         "oid": r["user_oid"] or "",
     }
 
-
-@projects_bp.before_app_request
-def _ensure_db_schema() -> None:
-    db = get_db()
-    ensure_schema(db)
-    db.commit()
 
 
 @projects_bp.get("")

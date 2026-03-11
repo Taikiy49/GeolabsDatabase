@@ -15,10 +15,11 @@ CREATE TABLE IF NOT EXISTS pnp_table (
   is_deleted INTEGER DEFAULT 0
 );
 
+CREATE INDEX IF NOT EXISTS idx_pnp_date ON pnp_table(date);
+CREATE INDEX IF NOT EXISTS idx_pnp_report_date ON pnp_table(report_date);
 CREATE INDEX IF NOT EXISTS idx_pnp_client ON pnp_table(client);
 CREATE INDEX IF NOT EXISTS idx_pnp_pr ON pnp_table(pr_number);
 CREATE INDEX IF NOT EXISTS idx_pnp_wo ON pnp_table(work_order_number);
-CREATE INDEX IF NOT EXISTS idx_pnp_date ON pnp_table(date);
 
 CREATE TABLE IF NOT EXISTS pnp_history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

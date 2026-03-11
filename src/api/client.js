@@ -1,5 +1,6 @@
 // src/api/client.js
-const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5000";
+const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:7000";
+console.log("API_BASE =", API_BASE);
 
 /**
  * MSAL user context (set from App.jsx after login)
