@@ -23,7 +23,7 @@ function parseSortableDate(value) {
   const clean = s.split("T")[0].split(" ")[0].trim();
 
   // MM/DD/YYYY or MM-DD-YYYY
-  let m = clean.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+  let m = clean.match(/^(\d{1,2})[/ -](\d{1,2})[/ -](\d{4})$/);
   if (m) {
     const month = Number(m[1]);
     const day = Number(m[2]);
@@ -45,7 +45,7 @@ function parseSortableDate(value) {
   }
 
   // YYYY/MM/DD or YYYY-MM-DD
-  m = clean.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})$/);
+  m = clean.match(/^(\d{4})[/ -](\d{1,2})[/ -](\d{1,2})$/);
   if (m) {
     const year = Number(m[1]);
     const month = Number(m[2]);
@@ -103,7 +103,7 @@ function DataTable({ items, fields, onCellCommit, pushToast }) {
     return Array.isArray(fields) && fields.length ? fields : [];
   }, [fields]);
 
-  const [editing, setEditing] = useState(null); // { r, c, id, key }
+  const [editing, setEditing] = useState(null);
   const [draft, setDraft] = useState("");
   const [sort, setSort] = useState({ key: "date", dir: "desc" });
   const inputRefs = useRef({});
@@ -175,7 +175,6 @@ function DataTable({ items, fields, onCellCommit, pushToast }) {
       sortedItems,
       draft,
       onCellCommit,
-      sortedItems.length,
       cols.length,
       beginEdit,
       focusCell,
