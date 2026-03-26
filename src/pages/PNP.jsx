@@ -4,7 +4,7 @@ import Topbar from "../components/Topbar";
 import DataTable from "../components/DataTable";
 import History from "../components/History"; // ✅ NEW
 import { apiGet, apiSend } from "../api/client";
-import "../styles/pnp.css";
+import "../styles/PNP.css";
 
 const FIELDS = [
   "date",

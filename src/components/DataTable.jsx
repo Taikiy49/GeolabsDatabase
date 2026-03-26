@@ -1,4 +1,5 @@
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState, useEffect } from "react";
+import "../styles/DataTable.css";
 
 const DATE_FIELDS = new Set(["date", "report_date"]);
 
@@ -22,7 +23,6 @@ function parseSortableDate(value) {
 
   const clean = s.split("T")[0].split(" ")[0].trim();
 
-  // MM/DD/YYYY or MM-DD-YYYY
   let m = clean.match(/^(\d{1,2})[/ -](\d{1,2})[/ -](\d{4})$/);
   if (m) {
     const month = Number(m[1]);
@@ -44,7 +44,6 @@ function parseSortableDate(value) {
     return year * 10000 + month * 100 + day;
   }
 
-  // YYYY/MM/DD or YYYY-MM-DD
   m = clean.match(/^(\d{4})[/ -](\d{1,2})[/ -](\d{1,2})$/);
   if (m) {
     const year = Number(m[1]);
@@ -98,6 +97,46 @@ function compareValues(a, b, key, dir) {
   return aStr.localeCompare(bStr, undefined, { numeric: true }) * multiplier;
 }
 
+function getCellClassName(key, isEditing) {
+  const classes = ["dt-cell"];
+
+  if (key === "project_name") {
+    classes.push("dt-cell--project");
+  }
+
+  if (DATE_FIELDS.has(key)) {
+    classes.push("dt-cell--date");
+  }
+
+  if (isEditing) {
+    classes.push("td-editing");
+  }
+
+  return classes.join(" ");
+}
+
+function AutoSizeTextarea({ value, onChange, onBlur, onKeyDown, inputRef }) {
+  useEffect(() => {
+    const el = inputRef?.current;
+    if (!el) return;
+
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [value, inputRef]);
+
+  return (
+    <textarea
+      ref={inputRef}
+      className="cell-input cell-input--editing"
+      value={value}
+      rows={1}
+      onChange={onChange}
+      onBlur={onBlur}
+      onKeyDown={onKeyDown}
+    />
+  );
+}
+
 function DataTable({ items, fields, onCellCommit, pushToast }) {
   const cols = useMemo(() => {
     return Array.isArray(fields) && fields.length ? fields : [];
@@ -121,7 +160,13 @@ function DataTable({ items, fields, onCellCommit, pushToast }) {
   const focusCell = useCallback((r, c) => {
     const refKey = `${r}-${c}`;
     const el = inputRefs.current[refKey];
-    if (el) el.focus();
+    if (el) {
+      el.focus();
+      const len = el.value?.length ?? 0;
+      if (typeof el.setSelectionRange === "function") {
+        el.setSelectionRange(len, len);
+      }
+    }
   }, []);
 
   const beginEdit = useCallback(
@@ -133,8 +178,10 @@ function DataTable({ items, fields, onCellCommit, pushToast }) {
       const current = row[key] ?? "";
       setEditing({ r: rowIndex, c: colIndex, id: row.id, key });
       setDraft(String(current));
+
+      setTimeout(() => focusCell(rowIndex, colIndex), 0);
     },
-    [sortedItems, cols]
+    [sortedItems, cols, focusCell]
   );
 
   const stopEdit = useCallback(() => {
@@ -159,7 +206,6 @@ function DataTable({ items, fields, onCellCommit, pushToast }) {
           const nextR = clamp(move.r, 0, sortedItems.length - 1);
           const nextC = clamp(move.c, 0, cols.length - 1);
           beginEdit(nextR, nextC);
-          setTimeout(() => focusCell(nextR, nextC), 0);
         } else {
           stopEdit();
         }
@@ -177,7 +223,6 @@ function DataTable({ items, fields, onCellCommit, pushToast }) {
       onCellCommit,
       cols.length,
       beginEdit,
-      focusCell,
       stopEdit,
       pushToast,
     ]
@@ -210,7 +255,7 @@ function DataTable({ items, fields, onCellCommit, pushToast }) {
                 <th
                   key={k}
                   onClick={() => toggleSort(k)}
-                  style={{ cursor: "pointer", userSelect: "none" }}
+                  className="dt-th-sortable"
                   title={`Sort by ${prettyLabel(k)}`}
                 >
                   {prettyLabel(k)}
@@ -230,110 +275,92 @@ function DataTable({ items, fields, onCellCommit, pushToast }) {
                   editing.r === rowIndex &&
                   editing.c === colIndex;
 
-                const value = isEditing
-                  ? draft
-                  : formatDisplayValue(key, row?.[key] ?? "");
+                const displayValue = formatDisplayValue(key, row?.[key] ?? "");
+                const isProjectName = key === "project_name";
+                const refKey = `${rowIndex}-${colIndex}`;
 
                 return (
                   <td
                     key={`${row.id ?? rowIndex}-${key}`}
-                    className={isEditing ? "td-editing" : ""}
+                    className={getCellClassName(key, isEditing)}
                   >
-                    <input
-                      ref={(el) => {
-                        inputRefs.current[`${rowIndex}-${colIndex}`] = el;
-                      }}
-                      className={`cell-input ${
-                        isEditing ? "cell-input--editing" : "cell-input--idle"
-                      }`}
-                      value={value}
-                      readOnly={!isEditing}
-                      onFocus={() => {
-                        if (!isEditing) beginEdit(rowIndex, colIndex);
-                      }}
-                      onClick={() => {
-                        if (!isEditing) beginEdit(rowIndex, colIndex);
-                      }}
-                      onChange={(e) => {
-                        if (isEditing) setDraft(e.target.value);
-                      }}
-                      onBlur={async () => {
-                        if (isEditing) {
+                    {isEditing ? (
+                      <AutoSizeTextarea
+                        inputRef={{
+                          get current() {
+                            return inputRefs.current[refKey];
+                          },
+                          set current(el) {
+                            inputRefs.current[refKey] = el;
+                          },
+                        }}
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        onBlur={async () => {
                           await commit();
-                        }
-                      }}
-                      onKeyDown={async (e) => {
-                        const r = rowIndex;
-                        const c = colIndex;
+                        }}
+                        onKeyDown={async (e) => {
+                          const r = rowIndex;
+                          const c = colIndex;
 
-                        if (!isEditing) {
-                          if (
-                            e.key === "Enter" ||
-                            e.key === "F2" ||
-                            e.key.length === 1
-                          ) {
-                            beginEdit(r, c);
-                          }
-                          return;
-                        }
-
-                        if (e.key === "Escape") {
-                          e.preventDefault();
-                          stopEdit();
-                          return;
-                        }
-
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          await commit({ move: { r: r + 1, c } });
-                          return;
-                        }
-
-                        if (e.key === "Tab") {
-                          e.preventDefault();
-                          const dir = e.shiftKey ? -1 : 1;
-                          await commit({ move: { r, c: c + dir } });
-                          return;
-                        }
-
-                        if (e.key === "ArrowDown") {
-                          e.preventDefault();
-                          await commit({ move: { r: r + 1, c } });
-                          return;
-                        }
-
-                        if (e.key === "ArrowUp") {
-                          e.preventDefault();
-                          await commit({ move: { r: r - 1, c } });
-                          return;
-                        }
-
-                        if (e.key === "ArrowRight") {
-                          const input = e.currentTarget;
-                          const atEnd =
-                            input.selectionStart === input.value.length &&
-                            input.selectionEnd === input.value.length;
-
-                          if (atEnd) {
+                          if (e.key === "Escape") {
                             e.preventDefault();
-                            await commit({ move: { r, c: c + 1 } });
+                            stopEdit();
+                            return;
                           }
-                          return;
-                        }
 
-                        if (e.key === "ArrowLeft") {
-                          const input = e.currentTarget;
-                          const atStart =
-                            input.selectionStart === 0 &&
-                            input.selectionEnd === 0;
-
-                          if (atStart) {
+                          if (e.key === "Enter" && !e.shiftKey) {
                             e.preventDefault();
-                            await commit({ move: { r, c: c - 1 } });
+                            await commit({ move: { r: r + 1, c } });
+                            return;
                           }
-                        }
-                      }}
-                    />
+
+                          if (e.key === "Tab") {
+                            e.preventDefault();
+                            const dir = e.shiftKey ? -1 : 1;
+                            await commit({ move: { r, c: c + dir } });
+                            return;
+                          }
+
+                          if (e.key === "ArrowDown") {
+                            const input = e.currentTarget;
+                            const atEnd =
+                              input.selectionStart === input.value.length &&
+                              input.selectionEnd === input.value.length;
+
+                            if (atEnd) {
+                              e.preventDefault();
+                              await commit({ move: { r: r + 1, c } });
+                            }
+                            return;
+                          }
+
+                          if (e.key === "ArrowUp") {
+                            const input = e.currentTarget;
+                            const atStart =
+                              input.selectionStart === 0 &&
+                              input.selectionEnd === 0;
+
+                            if (atStart) {
+                              e.preventDefault();
+                              await commit({ move: { r: r - 1, c } });
+                            }
+                            return;
+                          }
+                        }}
+                      />
+                    ) : (
+                      <span
+                        className={`cell-text ${
+                          isProjectName ? "cell-text--project" : ""
+                        }`}
+                        title={displayValue}
+                        data-tooltip={displayValue}
+                        onClick={() => beginEdit(rowIndex, colIndex)}
+                      >
+                        {displayValue}
+                      </span>
+                    )}
                   </td>
                 );
               })}
